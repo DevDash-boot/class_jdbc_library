@@ -2,27 +2,39 @@ package com.tenco.dao;
 
 import com.tenco.dto.Borrow;
 import com.tenco.util.DatabaseUtil;
-
 import java.sql.*;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
 public class BorrowDAO {
-    // 대출 현황 조회
-    // JOIN 을 해서 도서 이름까지 출력
-    public List<Borrow> getAllBorrows() {
+
+    // 현재 대출 중인 도서 목록 조회
+    // 도서 제목과 학생이름이 필요하므로
+    // books와 students 테이블에서 JOIN해서 한 번에 가져와야 한다.
+    public List<Borrow> getBorrowedBooks() {
         List<Borrow> borrowList = new ArrayList<>();
         String sql = """
-                SELECT b.id, b.book_id, b.student_id, bk.title, b.borrow_date, b.return_date
+                SELECT b.id, b.book_id, bk.title, b.student_id, s.name, b.borrow_date, b.return_date
                 FROM borrows b
-                INNER JOIN books bk
-                ON bk.id = b.book_id;
+                INNER JOIN books bk ON b.book_id = bk.id
+                INNER JOIN students s ON b.student_id = s.id
+                WHERE b.return_date IS NULL
+                ORDER BY b.borrow_date ASC;
                 """;
         try (Connection conn = DatabaseUtil.getConnection()) {
             try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 ResultSet rs = pstmt.executeQuery();
                 while (rs.next()) {
-                    borrowList.add(createBorrow(rs));
+                    borrowList.add(Borrow.builder()
+                            .id(rs.getInt("id"))
+                            .bookId(rs.getInt("book_id"))
+                            .bookTitle(rs.getString("title"))
+                            .studentId(rs.getInt("student_id"))
+                            .studentName(rs.getString("name"))
+                            .borrowDate(rs.getDate("borrow_date").toLocalDate())
+                            .returnDate(rs.getDate("return_date"))
+                            .build());
                 }
             }
         } catch (SQLException e) {
@@ -32,155 +44,152 @@ public class BorrowDAO {
     }
 
     // 도서 대출 기능(트랜잭션)
-    // 빌리고자 하는 도서 대출 가능 여부 확인 - SELECT
-    // 도서 대출 기록 - INSERT
-    public void borrowBook(Borrow borrow) {
-        int rows = 0;
-        // 도서 대출 가능 여부 확인
-        // available = true이면 도서 대출 가능
-        String sql1 = """
-                SELECT title, available FROM books
-                WHERE id = ?;
-                """;
-        String sql2 = """
-                INSERT INTO borrows(book_id, student_id, borrow_date) VALUES
-                 (?, ?, ?)
-                """;
-        String sql3 = """
-                UPDATE books
-                SET available = FALSE
-                WHERE id = ?
-                """;
-        try (Connection conn = DatabaseUtil.getConnection()) {
-            try{
-                // 트랜잭션
-                conn.setAutoCommit(false);
-                // 도서 대출 가능 여부 확인
-                boolean available;
-                try (PreparedStatement pstmt = conn.prepareStatement(sql1)) {
-                    pstmt.setInt(1, borrow.getBookId());
-                    ResultSet rs = pstmt.executeQuery();
-                    if (rs.next()) {
-                        available = rs.getBoolean("available");
-                        if (!available) {
-                            System.out.println("대출 불가능");
-                            return;
-                        }
-                    } else {
-                        System.out.println("존재하지 않는 도서입니다.");
-                        return;
-                    }
-                }
-                // 도서 대출 등록
-                try (PreparedStatement pstmt = conn.prepareStatement(sql2)) {
-                    pstmt.setInt(1, borrow.getBookId());
-                    pstmt.setInt(2, borrow.getStudentId());
-                    pstmt.setDate(3, Date.valueOf(borrow.getBorrowDate()));
+    // [처리 순서]
+    // 1. DB 연결을 얻고, 자동 커밋을 끈다.(트랜잭션 시작)
+    // 2. 도서가 존재하고, 대출 가능한 상태인지 확인(SELECT)
+    // 3. borrows 테이블에 대출을 기록(INSERT)
+    // 4. books 테이블에 available 을 FALSE 로 변경(UPDATE)
+    // 5. 2 ~ 4이 모두 성공 : COMMIT, 하나라도 실패하면 ROLLBACK
+    // 6. 자동 커밋을 원래대로 되돌리고 연결을 닫는다.
+    public void borrowBook(int bookId, int studentId) throws SQLException {
+        Connection conn = null;
+        // try-with-resources로 선언하지 않은 이유
+        // catch 블록에서 rollback을 호출하려면 conn 변수가 catch안에서도 보여야 한다.
+        // 그래서 try 바깥에 선언하고 finally에서 직접 닫는다.
+        try {
+            // 1. 트랜잭션 시작
+            conn = DatabaseUtil.getConnection();
+            // 기본값 autoCommit(true)이고, 이 상태에서는 SQL 한 줄마다 즉시 반영이 된다.
+            // 이 값을 false로 변경하면 commit()을 호출하기 전까지 모든 변경 사항이 임시 상태로 남는다.
+            conn.setAutoCommit(false);
 
-                    rows = pstmt.executeUpdate();
-                    System.out.println(rows + "행이 추가 되었습니다.");
-                }
-                // 도서가 대출되면 도서 상태 available 를 0으로 변경
-                try (PreparedStatement pstmt = conn.prepareStatement(sql3)) {
-                    pstmt.setInt(1, borrow.getBookId());
-                    pstmt.executeUpdate();
-                }
-                conn.commit();
-                System.out.println("도서 대출 완료");
-            } // end of try
-            catch (SQLException e) {
-                if (conn != null) {
-                    conn.rollback(); // 실패 시 롤백
-                    throw e;
-                }
-            } // end of catch
-            finally {
-                if (conn != null) {
-                    conn.setAutoCommit(true); // 기본값 복원
-                    conn.close();
-                }
-            }   // end of finally
-        } catch (SQLException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    // 도서 반납 기능(트랜잭션)
-    // 대출 기록 확인 - SELECT
-    // 반납 기록 등록 - UPDATE
-    public void returnBook(Borrow borrow){
-        int rows = 0;
-        String sql1 = """
-                SELECT * FROM borrows
-                WHERE id = ?;
-                """;
-        String sql2 = """
-                UPDATE borrows
-                SET return_date = ?
-                where id = ?;
-                """;
-        String sql3 = """
-                UPDATE books
-                SET available = TRUE
-                WHERE id = ?
-                """;
-        try (Connection conn = DatabaseUtil.getConnection()) {
-            try{
-                // 트랜잭션
-                conn.setAutoCommit(false);
-                // 도서 대출 여부 확인
-                try (PreparedStatement pstmt = conn.prepareStatement(sql1)) {
-                    pstmt.setInt(1, borrow.getId());
-                    ResultSet rs = pstmt.executeQuery();
+            // 2. 대출 가능 여부 확인
+            String checkSql = """
+                    SELECT available FROM books WHERE id = ?
+                    """;
+            try (PreparedStatement checkPstmt = conn.prepareStatement(checkSql)) {
+                checkPstmt.setInt(1, bookId);
+                try (ResultSet rs = checkPstmt.executeQuery()) {
                     if (!rs.next()) {
-                        System.out.println("존재하지 않는 대출 기록입니다.");
-                        return;
+                        throw new SQLException("존재하지 않는 도서입니다. ID : " + bookId);
+                    }
+                    if (!rs.getBoolean("available")) {
+                        throw new SQLException("현재 대출 중인 도서입니다.");
                     }
                 }
-                // 도서 반납 등록
-                try (PreparedStatement pstmt = conn.prepareStatement(sql2)) {
-                    pstmt.setDate(1, Date.valueOf(borrow.getReturnDate()));
-                    pstmt.setInt(2, borrow.getId());
+            }
+            // 3. 여기까지 코드가 내려온다면 대출 가능한 bookId이다.
+            // 대출 기록 처리
+            String borrowSql = """
+                    INSERT INTO borrows (book_id, student_id, borrow_date)
+                    VALUES (?, ?, ?)
+                    """;
+            try (PreparedStatement borrowPstmt = conn.prepareStatement(borrowSql)) {
+                borrowPstmt.setInt(1, bookId);
+                borrowPstmt.setInt(2, studentId);
+                // java.time.LocalDate를 JDBC가 이해하는 java.sql.Date로 변환해주어야한다.
+                borrowPstmt.setDate(3, Date.valueOf(LocalDate.now()));
+                int rows = borrowPstmt.executeUpdate();
+                if (rows < 0) {
+                    throw new SQLException("적용된 기록이 없습니다.");
+                }
+            }
 
-                    rows = pstmt.executeUpdate();
-                    System.out.println(rows + "행이 변경 되었습니다.");
-                }
-                // 도서가 반납되면 도서 상태 available 를 1로 변경
-                try (PreparedStatement pstmt = conn.prepareStatement(sql3)) {
-                    pstmt.setInt(1, borrow.getBookId());
-                    pstmt.executeUpdate();
-                }
-                conn.commit();
-                System.out.println("도서 반납 완료");
-            } // end of try
-            catch (SQLException e) {
-                if (conn != null) {
-                    conn.rollback(); // 실패 시 롤백
-                    throw e;
-                }
-            } // end of catch
-            finally {
-                if (conn != null) {
-                    conn.setAutoCommit(true); // 기본값 복원
-                    conn.close();
-                }
-            }   // end of finally
+            // 4. 도서 상태 변경(대출 불가로 해당 도서 처리)
+            String updateSql = """
+                    UPDATE books SET available = FALSE
+                    WHERE id = ?
+                    """;
+            try (PreparedStatement updatePstmt = conn.prepareStatement(updateSql)) {
+                updatePstmt.setInt(1, bookId);
+                updatePstmt.executeUpdate();
+            }
+            // 5-1. 여기까지 모두 성공했다면 확정
+            System.out.println("대출 완료");
+            conn.commit();
         } catch (SQLException e) {
-            throw new RuntimeException(e);
+            // 5-2. 하나라도 실패시 rollback처리
+            if (conn != null) {
+                conn.rollback();
+            }
+            throw new SQLException(e);
+        } finally {
+            // 6.
+            if (conn != null) {
+                conn.setAutoCommit(true); // 커밋 상태 변경
+                conn.close();
+            }
         }
     }
 
-    private Borrow createBorrow(ResultSet rs) throws SQLException {
-        Borrow borrow = new Borrow();
-        borrow.setId(rs.getInt("id"));
-        borrow.setBookId(rs.getInt("book_id"));
-        borrow.setStudentId(rs.getInt("student_id"));
-        borrow.setBorrowDate(rs.getDate("borrow_date").toLocalDate());
-        Date returnDate = rs.getDate("return_date");
+    // 도서 반납 처리(트랜잭션)
+    // [처리 순서]
+    // 1. DB 연결을 얻고, 자동 커밋을 끈다.(트랜잭션 시작)
+    // 2. 대출자가 반납한 기록이 있는 지 확인(SELECT)
+    // 3. 찾은 대출 기록의 return_date를 오늘 날짜로 변경(UPDATE)
+    // 4. books 테이블에 available 을 TRUE 로 변경(UPDATE)
+    // 5. 2 ~ 4이 모두 성공 : COMMIT, 하나라도 실패하면 ROLLBACK
+    // 6. 자동 커밋을 원래대로 되돌리고 연결을 닫는다.
+    public void returnBook(int bookId, int studentId) throws SQLException {
+        Connection conn = null;
+        try {
+            // 1. 트랜잭션 시작
+            conn = DatabaseUtil.getConnection();
+            conn.setAutoCommit(false);
 
-        if (returnDate != null) {
-            borrow.setReturnDate(returnDate.toLocalDate());
+            // 2. 대출 기록 확인
+            // 같은 학생이 같은 책을 이전에 빌렷다 반납한 기록이 있어도 그건 제외
+            String checkSql = """
+                    SELECT * FROM borrows 
+                    WHERE book_id = ? AND student_id = ? AND return_date IS NULL 
+                    """;
+            int borrowId;
+            try (PreparedStatement checkPstmt = conn.prepareStatement(checkSql)) {
+                checkPstmt.setInt(1, bookId);
+                checkPstmt.setInt(2, studentId);
+                try (ResultSet rs = checkPstmt.executeQuery()) {
+                    if (!rs.next()) {
+                        throw new SQLException("대출 기록이 없거나 반납되었습니다.");
+                    }
+                    // 추후 단계에서 어느행을 수정할 지 알아야하므로 아이디를 미리 꺼내둔다.
+                    borrowId = rs.getInt("id");
+                }
+            }
+            // 3. 반납일을 borrows의 return_date에 기록
+            String returnSql = """
+                    UPDATE borrows SET return_date = ? 
+                    WHERE id = ?
+                    """;
+            try (PreparedStatement returnPstmt = conn.prepareStatement(returnSql)) {
+                returnPstmt.setDate(1, Date.valueOf(LocalDate.now()));
+                returnPstmt.setInt(2, borrowId);
+                returnPstmt.executeUpdate();
+            }
+
+            // 4. 도서 상태 변경(대출 가능으로 해당 도서 처리)
+            String updateSql = """
+                    UPDATE books SET available = True
+                    WHERE id = ?
+                    """;
+            try (PreparedStatement updatePstmt = conn.prepareStatement(updateSql)) {
+                updatePstmt.setInt(1, bookId);
+                updatePstmt.executeUpdate();
+            }
+            // 5-1. 여기까지 모두 성공했다면 확정
+            System.out.println("반납 완료");
+            conn.commit();
+        } catch (SQLException e) {
+            // 5-2. 하나라도 실패시 rollback처리
+            if (conn != null) {
+                conn.rollback();
+            }
+            throw new SQLException(e);
+        } finally {
+            // 6.
+            if (conn != null) {
+                conn.setAutoCommit(true); // 커밋 상태 변경
+                conn.close();
+            }
         }
-        return borrow;
     }
 }
