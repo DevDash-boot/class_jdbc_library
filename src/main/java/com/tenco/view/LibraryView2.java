@@ -20,14 +20,13 @@ public class LibraryView2 {
     // 포함 관계
     // View는 Service만 알고 있으면 실행할 수 있는 역할
     private final LibraryService libraryService = new LibraryService();
-    private final Scanner scanner = new Scanner(System.in);
+    private final Scanner sc = new Scanner(System.in);
 
     // 현재 로그인한 학생 정보가 NULL이 아니라면 로그인된 상태로 보면 된다.
     // 만약 NULL이라면 로그인이 필요한 기능에서 로그인 요청을 먼저 유도해야한다.
     private Integer currentStudentId = null;
     private String currentStudentName = null;
     private Student currentStudent = null;
-    Scanner sc = new Scanner(System.in);
 
     // 프로그램 메인 루프
     // [처리 순서]
@@ -90,11 +89,19 @@ public class LibraryView2 {
 
     // 1. 도서 등록
     public void addBook() {
-        System.out.println("도서 등록 : ");
+        System.out.println("=== 도서 등록 ===");
         System.out.print("제목 : ");
         String title = sc.next();
+        if(title.isEmpty()){
+            System.out.println("제목은 필수입니다.");
+            return;
+        }
         System.out.print("저자 : ");
         String author = sc.next();
+        if(author.isEmpty()){
+            System.out.println("저자는 필수입니다.");
+            return;
+        }
         System.out.print("출판사 : ");
         String publisher = sc.next();
         System.out.print("출판년도 : ");
@@ -130,8 +137,12 @@ public class LibraryView2 {
 
     // 3. 도서 제목으로 조회
     public void searchBooksByTitle() {
-        System.out.print("=== 도서 검색 ===");
-        String bookTitle = sc.next();
+        System.out.print("도서 검색 :");
+        String bookTitle = sc.next().trim();
+        if(bookTitle.isEmpty()){
+            System.out.println("검색어(책 제목)을 입력해주세요.");
+            return;
+        }
 
         System.out.println("id |    제목    | 저자 | 출판사 | 출판년도 |    ISBN    | 이용여부");
         System.out.println("------------------------------------------------------------------");
