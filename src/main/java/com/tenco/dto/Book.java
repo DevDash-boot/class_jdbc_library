@@ -18,12 +18,11 @@ public class Book {
     private String isbn;
     private boolean available;
 
-    public Book(String title, String author, String publisher, int publicationYear, String isbn, boolean available) {
+    public Book(String title, String author, String publisher, int publicationYear, String isbn) {
         this.title = title;
         this.author = author;
         this.publisher = publisher;
         this.publicationYear = publicationYear;
         this.isbn = isbn;
-        this.available = available;
     }
 }
